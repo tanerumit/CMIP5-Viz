@@ -1,6 +1,18 @@
 
 
-gcmScatterInteractive <- function(
+#' Interactive scatter plot for CMIP5 projections
+#'
+#' @param data 
+#' @param hist.period 
+#' @param proj.period 
+#' @param tavg.breaks 
+#' @param prcp.breaks 
+#'
+#' @return
+#' @export
+#'
+#' @examples
+cmip5ScatterPlotInteractive <- function(
   data = NULL, hist.period = NULL, proj.period = NULL,
   tavg.breaks = NULL, prcp.breaks = NULL)
   
@@ -62,7 +74,7 @@ gcmScatterInteractive <- function(
   prcp_step <- (prcp.breaks[2] - prcp.breaks[1])/2
   prcp_lim  <- range(prcp.breaks) + c(- prcp_step, prcp_step)
   
-  hc <- highchart() %>% 
+  highchart() %>% 
     hc_add_series_df(delta_clim, 
                      type="scatter", radius=7,
                      x=tavg, y=prcp, group=scenario, allowPointSelect = T,
@@ -94,8 +106,4 @@ gcmScatterInteractive <- function(
     )}"),
                borderWidth = 2) %>%
     hc_exporting(enabled = T)
-  
-  hc
-  
-
 }
