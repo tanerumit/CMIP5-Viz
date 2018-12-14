@@ -1,0 +1,323 @@
+---
+title: "CMIP5 Interactive vizualizations"
+output: html_document
+---
+
+```{r setup, echo = FALSE}
+knitr::opts_chunk$set(echo = F, cache = F, message = F, warning = F)
+```
+
+```{r packages}
+
+library(hydrosystems); 
+library(ggHydro); 
+library(lubridate); 
+library(readr); 
+library(readxl);
+library(dplyr);
+library(tidyr); 
+library(highcharter)
+```
+
+Read GCM data from the CMIP5 data directory
+
+```{r readData}
+gcm_data <- read_rds("gcm_data.Rds")
+```
+
+## User defined variables
+
+Control the plots through these objects:
+
+- **data** R object that stores monthly CMIP5 projections for all model/scenario combinations 
+
+- **hist.period** historical climate period (e.g., 1905:2005)
+
+- **proj.period** projected climate period (e.g., 2006:2095)
+
+- **variable** variable to be plotted (currently "tavg" or "precip")
+
+<br>
+
+## CMIP5 Scatter Plot
+
+Use highcharter tools for interactive scatter of GCM projections
+
+```{r cmip5Scatter-source}
+
+cmip5ScatterPlotInteractive <- function(
+  data = NULL, hist.period = NULL, proj.period = NULL,
+  tavg.breaks = NULL, prcp.breaks = NULL)
+{
+
+  rcp_col <- c("#08519c", "#abd9e9", "#fe9929", "#f03b20")
+ 
+  # Summarize data for each projection
+  df <- lapply(names(data),
+               function(x) bind_rows(data[[x]], .id = "model")) %>%
+    setNames(names(data)) %>%
+    bind_rows(.id = "scenario") %>% ungroup() %>%
+    mutate(scenario = factor(scenario, 
+      levels = c("historical", "rcp26", "rcp45","rcp60","rcp85"),
+      labels = c("Historical", "RCP2.6", "RCP4.5", "RCP6.0", "RCP8.5")))
+  
+  data_hist <- df %>% filter(scenario == "Historical") %>%
+    filter(year %in% hist.period) %>%
+    group_by(model) %>%
+    summarize_at(vars(prcp, tavg), mean) %>%
+    mutate(prcp = prcp * 12)
+  
+  data_proj <- df %>% filter(scenario != "Historical") %>%
+    filter(year %in% proj.period) %>%
+    group_by(scenario, model) %>%
+    summarize_at(vars(prcp, tavg), mean) %>%
+    mutate(prcp = prcp * 12)
+  
+  # mean precip and temp changes
+  delta_prcp <- data_proj %>%
+    select(scenario, model, prcp) %>%
+    left_join(select(data_hist, model, hist_prcp = prcp), by = "model") %>%
+    mutate(prcp = round((prcp - hist_prcp) / hist_prcp * 100,2))
+  
+  delta_tavg <- data_proj %>%
+    select(scenario, model, tavg) %>%
+    left_join(select(data_hist, model, hist_tavg = tavg), by = "model") %>%
+    mutate(tavg = round(tavg - hist_tavg,2))
+  
+  delta_clim <- delta_prcp %>%
+    left_join(delta_tavg, by = c("scenario", "model")) %>%
+    na.omit() %>% select(scenario, model, prcp, tavg)
+  
+  # Axis breaks (if not provided)
+  if(is.null(tavg.breaks)) {
+    tavg.breaks <- seq(0, round(max(delta_tavg$tavg, na.rm = T),0) + 2, 1)
+  }
+  if(is.null(prcp.breaks)) {
+    prcp.breaks <- seq(
+      round(min(delta_prcp$prcp, na.rm = TRUE),-1) -20,
+      round(max(delta_prcp$prcp, na.rm = TRUE),-1) +20,
+      10)
+  }
+  
+  # Axis limits
+  tavg_step <- (tavg.breaks[2] - tavg.breaks[1])/2
+  tavg_lim  <- range(tavg.breaks) + c(- tavg_step, tavg_step)
+  prcp_step <- (prcp.breaks[2] - prcp.breaks[1])/2
+  prcp_lim  <- range(prcp.breaks) + c(- prcp_step, prcp_step)
+  
+  highchart(width = 850, height = 750) %>% 
+    hc_add_series_df(delta_clim, 
+                     type="scatter", radius=7,
+                     x=tavg, y=prcp, group=scenario, allowPointSelect = T,
+                     borderwidth = 2) %>%
+    #Axis settings
+    hc_xAxis(min = min(tavg.breaks), max = max(tavg.breaks), 
+             tickInterval= tavg.breaks[2] - tavg.breaks[1], 
+             gridLineWidth=2, crosshair=T,
+             title = list(text = "Temperature change (°C)")) %>%
+    hc_yAxis(min = min(prcp.breaks), max = max(prcp.breaks), 
+             tickInterval= prcp.breaks[2] - prcp.breaks[1],
+    gridLineWidth=2, crosshair=T,
+             title = list(text="Precipitation change (%)")) %>%
+    #Plot appearance
+    hc_add_theme(hc_theme_smpl()) %>%
+    hc_plotOptions(
+      series = list(marker = list(symbol = "circle"))) %>%
+    hc_legend(align = "right", verticalAlign = "top", 
+              layout = "vertical", x = 0, y = 50) %>%
+    hc_colors(rcp_col) %>%
+    #Additional information & settings
+    hc_tooltip(formatter = JS("function(){
+        return (' Scenario: ' + this.point.scenario +
+                ' <br> Model :' + this.point.model +
+                ' <br> ΔTemp (°C) :' + this.x +
+                ' <br> ΔPrecip (%) :' + this.y)}"),
+      borderWidth = 2) %>%
+    hc_exporting(enabled = T)
+}
+
+```
+
+```{r cmip5Scatter, echo = TRUE}
+cmip5ScatterPlotInteractive(
+  data = gcm_data,
+  hist.period = 1976:2005, 
+  proj.period = 2066:2095, 
+  tavg.breaks = seq(0,8,1), 
+  prcp.breaks = seq(-40,40,10))
+```
+
+<br>
+
+## CMIP5 IPCC-Style Trends 
+
+Use highcharter tools for IPCC style GCM trends
+
+```{r cmip5Trends-source}
+
+# Source scripts
+cmip5TrendsInteractive <- function(data = NULL, variable = NULL, 
+  hist.period = NULL, proj.period = NULL, ref.period = 1986:2005)
+{
+
+  rcp_col <- c("black", "#08519c", "#abd9e9", "#fe9929", "#f03b20")
+  
+  hist_ref <- data[["historical"]] %>% bind_rows(.id = "model") %>%
+    filter(year %in% ref.period) %>% ungroup() %>%
+    summarize(prcp = mean(prcp) * 12, tavg = mean(tavg))
+  
+  hist <- data[["historical"]] %>% bind_rows(.id = "model") %>% 
+    mutate(scenario = "Historical") %>% filter(year %in% hist.period)
+  
+  rcp1 <- data[["rcp26"]] %>% bind_rows(.id = "model") %>% mutate(scenario = "RCP2.6")
+  rcp2 <- data[["rcp45"]] %>% bind_rows(.id = "model") %>% mutate(scenario = "RCP4.5")
+  rcp3 <- data[["rcp60"]] %>% bind_rows(.id = "model") %>% mutate(scenario = "RCP6.0")
+  rcp4 <- data[["rcp85"]] %>% bind_rows(.id = "model") %>% mutate(scenario = "RCP8.5")
+  rcp  <- bind_rows(rcp1, rcp2, rcp3, rcp4) %>% filter(year %in% proj.period)
+  
+  clim_abs <- bind_rows(hist, rcp) %>%
+    group_by(model, scenario, year) %>%
+    summarize(prcp = mean(prcp)*12, tavg = mean(tavg))
+  
+  clim_anm <- clim_abs %>% ungroup() %>%
+    mutate(prcp = prcp/hist_ref$prcp * 100 - 100) %>%  #relative change 
+    mutate(tavg = tavg - hist_ref$tavg) # increase
+  
+  df <- clim_anm %>%
+    select(model:year, var = variable) %>%
+    group_by(scenario, year) %>%
+    summarize(mean = mean(var), min = quantile(var, probs = 0.05), 
+              max = quantile(var, probs = 0.95)) %>% ungroup()
+  
+  
+  df1 <- df %>% select(scenario, x = year, low = min, high = max) %>%
+    mutate(low = round(low,2), high = round(high,2)) %>%
+    mutate(scenario = factor(scenario, 
+      levels = c("Historical", "RCP2.6", "RCP4.5", "RCP6.0", "RCP8.5"),
+      labels = c("Historical-Range", "RCP2.6-Range", "RCP4.5-Range", "RCP6.0-Range", "RCP8.5-Range")))
+  
+  df2 <- df %>% select(scenario, x = year, y = mean) %>%
+    mutate(y = round(y, 2)) %>% 
+    mutate(scenario = factor(scenario, 
+      levels = c("Historical", "RCP2.6", "RCP4.5", "RCP6.0", "RCP8.5"),
+      labels = c("Historical-Mean", "RCP2.6-Mean", "RCP4.5-Mean", "RCP6.0-Mean", "RCP8.5-Mean")))
+  
+  highchart() %>%
+    hc_chart(borderWidth = 0.1) %>%
+    hc_add_theme(hc_theme_smpl()) %>%
+    hc_add_series(df1, type = "arearange", lineWidth = 0.1,
+                  hcaes(color = "scenario", group = "scenario"),
+                  fillOpacity = 0.2, showInLegend = T) %>%
+    hc_add_series(df2, type = "line",
+                  hcaes(color = "scenario", group = "scenario")) %>%
+    hc_colors(rcp_col) %>%
+    hc_legend(align = "right", verticalAlign = "top", 
+              layout = "vertical", x = 0, y = 50) %>%
+    hc_tooltip(crosshairs = TRUE,
+             headerFormat = "This is a custom header<br>",
+             formatter = JS("function(){ return (' Scenario: ' 
+                  + this.point.scenario +' <br> Year: ' + this.x + ' <br> Value: ' + this.y)}"),
+             borderWidth = 2, borderColor = "black") %>%
+    hc_exporting(enabled = T) %>%
+    hc_xAxis(title = list(text = "Year"),
+           plotLines = list(
+             list(color = "#e0e0e0", width = 2, value = 1900),
+             list(color = "#e0e0e0", width = 2, value = 1950),
+             list(color = "#e0e0e0", width = 2, value = 2000),
+             list(color = "#e0e0e0", width = 2, value = 2050),
+             list(color = "#e0e0e0", width = 2, value = 2100))) %>%
+    hc_yAxis(tickPositions = c(-6, -4, -2, 0, 2, 4, 6, 8, 10, 12)) %>%
+      hc_plotOptions(
+     marker = list(
+       lineWidth = 1,
+       fillColor = "black",
+       lineColor = "#ffffff"
+       )
+     )  
+}
+```
+
+```{r cmip5Trends, echo = TRUE}
+cmip5TrendsInteractive(
+  data = gcm_data, 
+  variable = "tavg", 
+  hist.period = 1890:2005, 
+  proj.period = 2006:2100)
+```
+
+<br>
+
+## CMIP5 Seasonal Changes (Boxplot)
+
+```{r cmip5Seasonal-source, echo = FALSE}
+
+cmip5SeasonalInteractive <- function(data = NULL, variable = NULL, 
+  hist.period = NULL, proj.period = NULL)
+  {
+  
+  rcp_col <- c("#08519c", "#abd9e9", "#fe9929", "#f03b20")
+  
+  # Summarize data for each projection
+  df <- lapply(names(data),
+               function(x) bind_rows(data[[x]], .id = "model")) %>%
+    setNames(names(data)) %>%
+    bind_rows(.id = "scenario") %>% ungroup() %>%
+    mutate(scenario = factor(scenario, 
+                             levels = c("historical", "rcp26", "rcp45","rcp60","rcp85"),
+                             labels = c("Historical", "RCP2.6", "RCP4.5", "RCP6.0", "RCP8.5")))
+  
+  data_hist <- df %>% filter(scenario == "Historical") %>%
+    filter(year %in% hist.period) %>%
+    group_by(model, mon) %>%
+    summarize_at(vars(prcp, tavg), mean) %>%
+    mutate(prcp = prcp * 12)
+  
+  data_proj <- df %>% filter(scenario != "Historical") %>%
+    filter(year %in% proj.period) %>%
+    group_by(scenario, model, mon) %>%
+    summarize_at(vars(prcp, tavg), mean) %>%
+    mutate(prcp = prcp * 12)
+  
+  # mean precip and temp changes
+  delta_prcp <- data_proj %>%
+    select(scenario, model, prcp, mon) %>%
+    left_join(select(data_hist, model, hist_prcp = prcp, mon), by = c("model", "mon")) %>%
+    mutate(prcp = round((prcp - hist_prcp) / hist_prcp * 100,2))
+  
+  delta_tavg <- data_proj %>%
+    select(scenario, model, tavg, mon) %>%
+    left_join(select(data_hist, model, hist_tavg = tavg, mon), by = c("model", "mon")) %>%
+    mutate(tavg = round(tavg - hist_tavg,2))
+  
+  delta_clim <- delta_prcp %>%
+    left_join(delta_tavg, by = c("scenario", "model", "mon")) %>%
+    na.omit() %>% select(scenario, model, mon, prcp, tavg)
+  
+  df <- delta_clim %>% select(scenario, model, mon, var = variable) %>%
+    mutate(mon = factor(mon, levels = 1:12, labels = month.abb))
+
+  # Axis breaks (if not provided)
+  yaxis_title <- if(variable == "tavg") {"Temperature change (°C)"} else {"Precip. change (%)"}
+  
+  hcboxplot(x = df$var, var = df$mon, var2 = df$scenario, outliers = FALSE) %>%
+    hc_chart(type = "column") %>%
+    hc_colors(rcp_col) %>%
+    hc_legend(align = "right", verticalAlign = "top", 
+              layout = "vertical", x = 0, y = 50) %>%
+    hc_tooltip(crosshairs = TRUE, borderWidth = 2, borderColor = "black") %>%
+    hc_exporting(enabled = T) %>%
+    hc_yAxis(title = list(text = yaxis_title)) %>%
+    hc_xAxis(title = list(text = "Month")) 
+}
+
+```
+
+```{r cmip5Seasonal, echo = TRUE}
+
+cmip5SeasonalInteractive(
+  data = gcm_data, 
+  variable = "tavg",
+  hist.period = 1890:2005,
+  proj.period = 2006:2100)
+
+```
