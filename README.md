@@ -1,2 +1,2 @@
 # CMIP5-Viz
-CMIP5 Data Interactive Vizualization
+Interactive Vizualization of Climate Projections from Coupled Model Intercomparison Project Phase 5 (CMIP5) 
